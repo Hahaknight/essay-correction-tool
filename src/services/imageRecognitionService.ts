@@ -9,10 +9,10 @@ export interface RecognitionResult {
 
 const IMAGE_PROMPT = '识别图片中的文字，原文输出，不要修改。如果有段落请保留段落结构。';
 
-const MCP_INIT_TIMEOUT_MS = 60000; // MCP初始化超时
-const MCP_CALL_TIMEOUT_MS = 180000; // MCP调用超时（图片识别可能较慢）
+const MCP_INIT_TIMEOUT_MS = 120000; // MCP初始化超时（2分钟）
+const MCP_CALL_TIMEOUT_MS = 300000; // MCP调用超时（5分钟，图片识别+评分可能较慢）
 const MAX_RETRIES = 5;
-const RETRY_DELAY_MS = 10000; // 重试间隔10秒
+const RETRY_DELAY_MS = 30000; // 重试间隔30秒（给API恢复时间）
 
 let mcpProcess: ChildProcess | null = null;
 let mcpReady = false;
