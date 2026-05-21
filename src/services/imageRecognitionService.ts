@@ -1,6 +1,5 @@
 import { Student } from './taskService';
-import { spawn } from 'child_process';
-import path from 'path';
+import { spawn, ChildProcess } from 'child_process';
 
 export interface RecognitionResult {
   success: boolean;
@@ -10,10 +9,27 @@ export interface RecognitionResult {
 
 const IMAGE_PROMPT = '识别图片中的文字，原文输出，不要修改。如果有段落请保留段落结构。';
 
-let mcpProcess: ReturnType<typeof spawn> | null = null;
+const MCP_INIT_TIMEOUT_MS = 60000; // MCP初始化超时
+const MCP_CALL_TIMEOUT_MS = 180000; // MCP调用超时（图片识别可能较慢）
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 10000; // 重试间隔10秒
+
+let mcpProcess: ChildProcess | null = null;
 let mcpReady = false;
-let mcpResponseResolver: ((value: string) => void) | null = null;
-let mcpResponseRejecter: ((reason: Error) => void) | null = null;
+let pendingResolver: ((value: string) => void) | null = null;
+let pendingRejecter: ((reason: Error) => void) | null = null;
+
+function resetMCP(): void {
+  mcpReady = false;
+  pendingResolver = null;
+  pendingRejecter = null;
+  if (mcpProcess) {
+    try {
+      mcpProcess.kill();
+    } catch {}
+    mcpProcess = null;
+  }
+}
 
 function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -22,10 +38,7 @@ function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
       return;
     }
 
-    if (mcpProcess) {
-      mcpProcess.kill();
-      mcpProcess = null;
-    }
+    resetMCP();
 
     const env = {
       MINIMAX_API_KEY: apiKey,
@@ -37,10 +50,8 @@ function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    let initResolve: () => void;
-    const initPromise = new Promise<void>((r) => {
-      initResolve = r;
-    });
+    let initTimeout: NodeJS.Timeout;
+    let initDone = false;
 
     mcpProcess.stdout.on('data', (data) => {
       const text = data.toString();
@@ -51,8 +62,10 @@ function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
           const response = JSON.parse(line);
 
           if (response.id === 1 && response.result) {
+            initDone = true;
             mcpReady = true;
-            initResolve();
+            clearTimeout(initTimeout);
+            resolve();
           }
 
           if (response.id === 2 && response.result) {
@@ -60,12 +73,12 @@ function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
             if (content && content[0] && content[0].text) {
               const textResult = content[0].text;
               if (textResult.startsWith('Error')) {
-                if (mcpResponseRejecter) mcpResponseRejecter(new Error(textResult));
+                if (pendingRejecter) pendingRejecter(new Error(textResult));
               } else {
-                if (mcpResponseResolver) mcpResponseResolver(textResult);
+                if (pendingResolver) pendingResolver(textResult);
               }
-              mcpResponseResolver = null;
-              mcpResponseRejecter = null;
+              pendingResolver = null;
+              pendingRejecter = null;
             }
           }
         } catch {}
@@ -75,39 +88,57 @@ function initMCPProcess(apiKey: string, apiHost: string): Promise<void> {
     mcpProcess.stderr.on('data', () => {});
 
     mcpProcess.on('error', (err) => {
-      mcpReady = false;
-      mcpProcess = null;
+      clearTimeout(initTimeout);
+      resetMCP();
       reject(err);
     });
 
+    mcpProcess.on('close', (code) => {
+      if (!initDone) {
+        clearTimeout(initTimeout);
+        resetMCP();
+        reject(new Error(`MCP process closed unexpectedly with code ${code}`));
+      }
+    });
+
+    // 发送初始化请求
     setTimeout(() => {
-      const initRequest = {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'essay-correction-tool', version: '1.0.0' },
-        },
-      };
-      mcpProcess?.stdin.write(JSON.stringify(initRequest) + '\n');
+      if (mcpProcess && !initDone) {
+        mcpProcess.stdin.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'essay-correction-tool', version: '1.0.0' },
+            },
+          }) + '\n'
+        );
+      }
     }, 1000);
 
+    // 发送初始化完成通知
     setTimeout(() => {
-      const notif = { jsonrpc: '2.0', method: 'initialized', params: {} };
-      mcpProcess?.stdin.write(JSON.stringify(notif) + '\n');
+      if (mcpProcess && !initDone) {
+        mcpProcess.stdin.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'initialized',
+            params: {},
+          }) + '\n'
+        );
+      }
     }, 2000);
 
-    initPromise
-      .then(() => resolve())
-      .catch((err) => reject(err));
-
-    setTimeout(() => {
-      if (!mcpReady) {
-        reject(new Error('MCP init timeout'));
+    // 初始化超时
+    initTimeout = setTimeout(() => {
+      if (!initDone) {
+        resetMCP();
+        reject(new Error('MCP init timeout (60s)'));
       }
-    }, 30000);
+    }, MCP_INIT_TIMEOUT_MS);
   });
 }
 
@@ -118,59 +149,103 @@ function callMCPUnderstandImage(
   imagePath: string
 ): Promise<string> {
   return new Promise(async (resolve, reject) => {
-    await initMCPProcess(apiKey, apiHost);
+    let callTimeout: NodeJS.Timeout;
 
-    mcpResponseResolver = resolve;
-    mcpResponseRejecter = reject;
+    try {
+      await initMCPProcess(apiKey, apiHost);
 
-    const mcpRequest = {
-      jsonrpc: '2.0',
-      id: 2,
-      method: 'tools/call',
-      params: {
-        name: 'understand_image',
-        arguments: { prompt, image_source: imagePath },
-      },
-    };
+      pendingResolver = resolve;
+      pendingRejecter = reject;
 
-    mcpProcess?.stdin.write(JSON.stringify(mcpRequest) + '\n');
-
-    setTimeout(() => {
-      if (mcpResponseRejecter) {
-        mcpResponseRejecter(new Error('MCP call timeout'));
-        mcpResponseResolver = null;
-        mcpResponseRejecter = null;
+      if (mcpProcess) {
+        mcpProcess.stdin.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'tools/call',
+            params: {
+              name: 'understand_image',
+              arguments: { prompt, image_source: imagePath },
+            },
+          }) + '\n'
+        );
       }
-    }, 120000);
+
+      // 调用超时
+      callTimeout = setTimeout(() => {
+        pendingResolver = null;
+        pendingRejecter = null;
+        resetMCP(); // 重置MCP，下次会重新初始化
+        reject(new Error(`MCP call timeout (${MCP_CALL_TIMEOUT_MS / 1000}s)`));
+      }, MCP_CALL_TIMEOUT_MS);
+
+    } catch (err) {
+      clearTimeout(callTimeout);
+      pendingResolver = null;
+      pendingRejecter = null;
+      reject(err);
+    }
   });
+}
+
+async function callWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number,
+  retryDelay: number,
+  errorContext: string
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.error(`[${errorContext}] Attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+
+      if (attempt < maxRetries) {
+        console.log(`[${errorContext}] Retrying in ${retryDelay / 1000}s...`);
+        await new Promise((r) => setTimeout(r, retryDelay));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 export async function recognizeImages(
   taskId: string,
   student: Student
 ): Promise<RecognitionResult> {
+  if (!student.pages || student.pages.length === 0) {
+    return { success: false, error: '没有上传的图片' };
+  }
+
+  const apiKey = process.env.MINIMAX_API_KEY;
+  if (!apiKey) {
+    return { success: false, error: 'MINIMAX_API_KEY is not configured' };
+  }
+
+  const apiHost = process.env.MINIMAX_API_HOST || 'https://api.minimaxi.com';
+  const sortedPages = [...student.pages].sort((a, b) => a.pageIndex - b.pageIndex);
+  const fullTextParts: string[] = [];
+
   try {
-    if (!student.pages || student.pages.length === 0) {
-      return { success: false, error: '没有上传的图片' };
-    }
-
-    const apiKey = process.env.MINIMAX_API_KEY;
-    if (!apiKey) {
-      return { success: false, error: 'MINIMAX_API_KEY is not configured' };
-    }
-
-    const sortedPages = [...student.pages].sort((a, b) => a.pageIndex - b.pageIndex);
-    const fullTextParts: string[] = [];
-
     for (let i = 0; i < sortedPages.length; i++) {
       const page = sortedPages[i];
       const imagePath = page.filePath;
 
-      const recognizedText = await callMCPUnderstandImage(
-        apiKey,
-        process.env.MINIMAX_API_HOST || 'https://api.minimaxi.com',
-        IMAGE_PROMPT,
-        imagePath
+      const recognizedText = await callWithRetry(
+        () =>
+          callMCPUnderstandImage(
+            apiKey,
+            apiHost,
+            IMAGE_PROMPT,
+            imagePath
+          ),
+        MAX_RETRIES,
+        RETRY_DELAY_MS,
+        `ImageRecognition[${student.studentName}-Page${i + 1}]`
       );
 
       if (recognizedText) {
@@ -187,11 +262,9 @@ export async function recognizeImages(
       recognizedText: fullTextParts.join('\n\n'),
     };
   } catch (error) {
-    mcpReady = false;
-    if (mcpProcess) {
-      mcpProcess.kill();
-      mcpProcess = null;
-    }
+    // 重置MCP状态
+    resetMCP();
+
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
