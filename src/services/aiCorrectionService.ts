@@ -234,7 +234,7 @@ export async function correctEssay(
     const response = await callMinimaxChatWithRetry(
       apiKey,
       [{ role: 'user', content: prompt }],
-      3, // 最多重试3次
+      5, // 最多重试5次
       5000 // 5秒后重试
     );
 
