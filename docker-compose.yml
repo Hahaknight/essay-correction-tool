@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  essay-correction-tool:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.chat}
+      - MINIMAX_API_HOST=${MINIMAX_API_HOST:-${MINIMAX_BASE_URL:-https://api.minimaxi.chat}}
+      - MINIMAX_TEXT_MODEL=${MINIMAX_TEXT_MODEL:-MiniMax-M2.7}
+      - MINIMAX_VISION_MODEL=${MINIMAX_VISION_MODEL:-MiniMax-VL02}
+      - MINIMAX_CORRECTION_TEMPERATURE=${MINIMAX_CORRECTION_TEMPERATURE:-0.3}
+      - MINIMAX_CORRECTION_TIMEOUT_MS=${MINIMAX_CORRECTION_TIMEOUT_MS:-90000}
+      - MINIMAX_CORRECTION_MAX_RETRIES=${MINIMAX_CORRECTION_MAX_RETRIES:-2}
+      - MINIMAX_CORRECTION_RETRY_DELAY_MS=${MINIMAX_CORRECTION_RETRY_DELAY_MS:-5000}
+    volumes:
+      - ./tasks:/app/tasks
+    restart: unless-stopped

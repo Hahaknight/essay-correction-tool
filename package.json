@@ -5,8 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "node .next/standalone/server.js",
+    "lint": "eslint",
+    "test": "tsx scripts/quality-check.ts"
   },
   "dependencies": {
     "@types/jszip": "^3.4.0",
@@ -28,6 +29,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }
