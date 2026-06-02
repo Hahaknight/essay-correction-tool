@@ -1,27 +1,34 @@
-﻿# 浣滄枃 AI 鎵规敼宸ュ叿
+# 作文 AI 批改工具
 
-鎵归噺涓婁紶瀛︾敓浣滄枃鍥剧墖锛岄€氳繃 Minimax AI 鑷姩璇嗗埆鏂囧瓧骞惰繘琛屼綔鏂囨壒鏀癸紝鐢熸垚璇︾粏鐨?HTML 鎶ュ憡銆?
-## 鍔熻兘
+批量上传学生作文图片，通过 MiniMax AI 自动识别文字并进行作文批改，生成详细的 HTML 报告。
 
-- 鎵归噺涓婁紶浣滄枃鍥剧墖锛堟敮鎸?jpg/png/webp锛?- 鑷姩鎸夋枃浠跺悕鍒嗙粍瀛︾敓浣滄枃
-- AI 鍥惧儚璇嗗埆鎻愬彇鏂囧瓧
-- AI 浣滄枃鎵规敼锛堣瘎鍒嗐€佷紭鐐广€侀棶棰樸€佷慨鏀瑰缓璁級
-- 鐢熸垚鏀硅壇鐗堜綔鏂?- 宸ヤ綔鍙板紡鎵规敼娴佺▼锛堣鍒欍€佷笂浼犮€佽繘搴︺€佺粨鏋滃湪鍚屼竴椤碉級
-- 鎵归噺涓嬭浇宸叉垚鍔熸姤鍛婏紙ZIP锛?- 浠诲姟鍘嗗彶璁板綍銆佸崟绡囬噸璇曚笌涓€閿噸璇曞け璐ラ」
+## 功能
 
-## 蹇€熼儴缃诧紙Docker锛?
-### 鍓嶇疆瑕佹眰
+- 批量上传作文图片（支持 jpg/png/webp）
+- 自动按文件名分组学生作文
+- AI 图像识别提取文字
+- AI 作文批改（评分、优点、问题、修改建议）
+- 生成改良版作文
+- 工作台式批改流程（规则、上传、进度、结果在同一页）
+- 批量下载已成功报告（ZIP）
+- 任务历史记录、单篇重试与一键重试失败项
+
+## 快速部署（Docker）
+
+### 前置要求
 - Docker >= 20.10
 - Docker Compose >= 2.0
 
-### 鍚姩姝ラ
+### 启动步骤
 
-1. 澶嶅埗鐜閰嶇疆鏂囦欢锛?```bash
+1. 复制环境配置文件：
+```bash
 cp .env.example .env
 ```
 
-2. 缂栬緫 `.env`锛屽～鍏ヤ綘鐨?API Key锛?```
-MINIMAX_API_KEY=浣犵殑Minimax API瀵嗛挜
+2. 编辑 `.env`，填入你的 API Key：
+```
+MINIMAX_API_KEY=你的_MiniMax_API_密钥
 MINIMAX_API_HOST=https://api.minimaxi.com
 MINIMAX_TEXT_MODEL=MiniMax-M3
 MINIMAX_VISION_MODEL=MiniMax-M3
@@ -32,52 +39,56 @@ MINIMAX_CORRECTION_MAX_RETRIES=2
 MINIMAX_CORRECTION_RETRY_DELAY_MS=5000
 ```
 
-3. 鏋勫缓骞跺惎鍔細
+3. 构建并启动：
 ```bash
 docker-compose up -d
 ```
 
-4. 璁块棶 http://localhost:3000
+4. 访问 http://localhost:3000
 
-### 甯哥敤鍛戒护
+### 常用命令
 
 ```bash
-# 鏌ョ湅鏃ュ織
+# 查看日志
 docker-compose logs -f
 
-# 鍋滄鏈嶅姟
+# 停止服务
 docker-compose down
 
-# 閲嶅惎鏈嶅姟
+# 重启服务
 docker-compose restart
 ```
 
-## 鏈湴寮€鍙?
+## 本地开发
+
 ```bash
 npm install
 npm run dev
 ```
 
-璁块棶 http://localhost:3000
+访问 http://localhost:3000
 
-## 璐ㄩ噺妫€鏌?
+## 质量检查
+
 ```bash
 npm run lint
 npm run test
 npm run build
 ```
 
-鐢熶骇鏋勫缓浣跨敤 Next.js standalone 杈撳嚭锛宍npm run start` 浼氳繍琛?`.next/standalone/server.js`銆傝鍏堟墽琛?`npm run build`銆?
-## 鏂囦欢鍛藉悕瑙勫垯
+生产构建使用 Next.js standalone 输出，`npm run start` 会运行 `.next/standalone/server.js`。请先执行 `npm run build`。
 
-涓婁紶鍥剧墖鏃惰鎸?`瀛︾敓濮撳悕-椤电爜.jpg` 鏍煎紡鍛藉悕锛屼緥濡傦細
-- `寮犱笁-1.jpg`銆乣寮犱笁-2.jpg`
-- `鏉庡洓-1.jpg`
+## 文件命名规则
 
-绯荤粺浼氳嚜鍔ㄦ寜瀛︾敓濮撳悕鍒嗙粍銆?
-## 鎶€鏈爤
+上传图片时请按 `学生姓名-页码.jpg` 格式命名，例如：
+- `张三-1.jpg`、`张三-2.jpg`
+- `李四-1.jpg`
 
-- Next.js 16 + TypeScript + Tailwind CSS
-- Minimax MCP (鍥剧墖璇嗗埆)
-- Minimax Chat API (浣滄枃鎵规敼)
-- JSZip (鎶ュ憡鎵撳寘)
+系统会自动按学生姓名分组。
+
+## 技术栈
+
+- Next.js 16 + React 19 + TypeScript + Tailwind CSS 4
+- MiniMax MCP（图像识别）
+- MiniMax Chat API（作文批改）
+- JSZip / archiver（报告打包）
