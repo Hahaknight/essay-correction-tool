@@ -1,6 +1,9 @@
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_BASE_URL = 'https://api.minimaxi.com';
-const DEFAULT_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M2.7';
+import {
+  DEFAULT_TEXT_MODEL,
+  DEFAULT_VISION_MODEL,
+  getMinimaxApiHost,
+  getMinimaxApiKey,
+} from './minimaxConfig';
 
 interface MinimaxMessage {
   role: 'user' | 'assistant' | 'system';
@@ -11,20 +14,21 @@ export async function chatComplete(
   messages: MinimaxMessage[],
   model?: string
 ): Promise<string> {
-  if (!MINIMAX_API_KEY) {
+  const apiKey = getMinimaxApiKey();
+  if (!apiKey) {
     throw new Error('MINIMAX_API_KEY is not configured');
   }
 
   const response = await fetch(
-    `${MINIMAX_BASE_URL}/v1/chat/completions`,
+    `${getMinimaxApiHost()}/v1/chat/completions`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: model || DEFAULT_MODEL,
+        model: model || DEFAULT_TEXT_MODEL,
         messages,
         temperature: 0.7,
       }),
@@ -52,27 +56,38 @@ export async function visionRecognize(
   prompt: string,
   model?: string
 ): Promise<string> {
-  const visionModel = model || 'MiniMax-VL02';
+  const apiKey = getMinimaxApiKey();
+  if (!apiKey) {
+    throw new Error('MINIMAX_API_KEY is not configured');
+  }
 
-  const contents = imageBase64s.map((base64) => ({
-    type: 'image_url' as const,
+  const visionModel = model || DEFAULT_VISION_MODEL;
+
+  interface VisionContentItem {
+    type: 'image_url' | 'text';
+    image_url?: { url: string };
+    text?: string;
+  }
+
+  const contents: VisionContentItem[] = imageBase64s.map((base64) => ({
+    type: 'image_url',
     image_url: {
       url: `data:image/jpeg;base64,${base64}`,
     },
   }));
 
   contents.push({
-    type: 'text' as const,
+    type: 'text',
     text: prompt,
   });
 
   const response = await fetch(
-    `${MINIMAX_BASE_URL}/v1/chat/completions`,
+    `${getMinimaxApiHost()}/v1/chat/completions`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
         model: visionModel,
@@ -102,12 +117,13 @@ export async function textComplete(
   messages: MinimaxMessage[],
   responseFormat?: { type: 'json_object' }
 ): Promise<string> {
-  if (!MINIMAX_API_KEY) {
+  const apiKey = getMinimaxApiKey();
+  if (!apiKey) {
     throw new Error('MINIMAX_API_KEY is not configured');
   }
 
   const requestBody: Record<string, unknown> = {
-    model: DEFAULT_MODEL,
+    model: DEFAULT_TEXT_MODEL,
     messages,
     temperature: 0.7,
   };
@@ -117,12 +133,12 @@ export async function textComplete(
   }
 
   const response = await fetch(
-    `${MINIMAX_BASE_URL}/v1/chat/completions`,
+    `${getMinimaxApiHost()}/v1/chat/completions`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(requestBody),
     }

@@ -1,8 +1,19 @@
-import { Student, getTask, saveTask } from '@/services/taskService';
+import { Student } from '@/services/taskService';
+import type { ReportData } from '@/services/reportService';
+import {
+  DEFAULT_TEXT_MODEL,
+  getCorrectionMaxTokens,
+  getCorrectionMaxRetries,
+  getCorrectionRetryDelayMs,
+  getCorrectionTemperature,
+  getCorrectionTimeoutMs,
+  getMinimaxApiHost,
+  getMinimaxApiKey,
+} from './minimaxConfig';
 
 export interface CorrectionResult {
   success: boolean;
-  report?: object;
+  report?: ReportData;
   error?: string;
 }
 
@@ -89,14 +100,19 @@ const CORRECTION_PROMPT = `你是一名有多年作文批改经验的语文老�
   "nextTrainingAdvice": "下次训练建议"
 }`;
 
-const MINIMAX_API_HOST = 'https://api.minimaxi.com';
-const DEFAULT_MODEL = 'MiniMax-M2.7';
-const API_TIMEOUT_MS = 300000; // 5分钟超时（AI评分可能较慢）
+const MAX_RESPONSE_PREVIEW_LENGTH = 300;
+
+function stripThinkingText(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .trim();
+}
 
 function fixJsonString(jsonStr: string): string {
-  jsonStr = jsonStr.trim();
+  jsonStr = stripThinkingText(jsonStr.trim());
 
-  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+  const jsonMatch = jsonStr.match(/{[\s\S]*}/);
   if (jsonMatch) {
     return jsonMatch[0];
   }
@@ -107,17 +123,175 @@ function fixJsonString(jsonStr: string): string {
   return jsonStr.trim();
 }
 
-function parseReportJson(jsonStr: string): object | null {
+function toPlainObject(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown, fallback = ''): string {
+  if (value === undefined || value === null) return fallback;
+  return String(value).trim();
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/[^\d.-]/g, ''));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function parseRequiredNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/[^\d.-]/g, ''));
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function asNullableNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = asNumber(value, Number.NaN);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asString(item)).filter(Boolean);
+  }
+  const text = asString(value);
+  return text ? [text] : [];
+}
+
+function normalizeReportData(value: unknown, studentName: string): ReportData | null {
+  const raw = toPlainObject(value);
+  if (!raw) return null;
+
+  const dimensionScores = Array.isArray(raw.dimensionScores)
+    ? raw.dimensionScores.map((item) => {
+        const dimension = toPlainObject(item) || {};
+        return {
+          name: asString(dimension.name, '综合评分'),
+          score: asNumber(dimension.score),
+          maxScore: asNullableNumber(dimension.maxScore),
+          comment: asString(dimension.comment),
+        };
+      })
+    : [];
+
+  const specificSuggestions = Array.isArray(raw.specificSuggestions)
+    ? raw.specificSuggestions.map((item) => {
+        const suggestion = toPlainObject(item) || {};
+        return {
+          problem: asString(suggestion.problem),
+          suggestion: asString(suggestion.suggestion || suggestion.advice),
+        };
+      }).filter((item) => item.problem || item.suggestion)
+    : [];
+
+  const goodSentences = Array.isArray(raw.goodSentences)
+    ? raw.goodSentences.map((item) => {
+        const sentence = toPlainObject(item) || {};
+        return {
+          sentence: asString(sentence.sentence),
+          reason: asString(sentence.reason),
+        };
+      }).filter((item) => item.sentence || item.reason)
+    : [];
+
+  const weakSentences = Array.isArray(raw.weakSentences)
+    ? raw.weakSentences.map((item) => {
+        const sentence = toPlainObject(item) || {};
+        return {
+          sentence: asString(sentence.sentence),
+          problem: asString(sentence.problem),
+          rewrite: asString(sentence.rewrite),
+        };
+      }).filter((item) => item.sentence || item.problem || item.rewrite)
+    : [];
+
+  const score = parseRequiredNumber(raw.score);
+  if (score === null) {
+    return null;
+  }
+
+  const report: ReportData = {
+    studentName: asString(raw.studentName, studentName) || studentName,
+    detectedEssayTopic: asString(raw.detectedEssayTopic),
+    detectedFullScore: asString(raw.detectedFullScore),
+    score,
+    level: asString(raw.level, '待复核'),
+    summary: asString(raw.summary || raw.comment || raw.evaluation),
+    dimensionScores,
+    strengths: asStringArray(raw.strengths),
+    problems: asStringArray(raw.problems),
+    specificSuggestions,
+    goodSentences,
+    weakSentences,
+    improvedEssay: asString(raw.improvedEssay),
+    nextTrainingAdvice: asString(raw.nextTrainingAdvice),
+  };
+
+  if (!report.summary && report.strengths.length === 0 && report.problems.length === 0) {
+    return null;
+  }
+
+  return report;
+}
+
+function parseReportJson(jsonStr: string, studentName: string): ReportData | null {
   try {
-    return JSON.parse(jsonStr);
+    return normalizeReportData(JSON.parse(fixJsonString(jsonStr)), studentName);
   } catch {
     const fixed = fixJsonString(jsonStr);
     try {
-      return JSON.parse(fixed);
+      return normalizeReportData(JSON.parse(fixed), studentName);
     } catch {
       return null;
     }
   }
+}
+
+function buildJsonRepairPrompt(
+  studentName: string,
+  correctionRequirement: string,
+  recognizedText: string,
+  previousResponse: string
+): string {
+  return `请把下面的作文批改内容整理为严格合法 JSON。只输出 JSON，不要输出 Markdown、解释或 <think>。
+
+学生姓名：${studentName}
+
+批改要求：
+${correctionRequirement}
+
+学生作文识别文本：
+${recognizedText}
+
+上一次模型输出：
+${previousResponse}
+
+必须输出如下字段：
+{
+  "studentName": "${studentName}",
+  "detectedEssayTopic": "",
+  "detectedFullScore": "",
+  "score": 0,
+  "level": "优秀/良好/合格/待提升",
+  "summary": "",
+  "dimensionScores": [{"name":"","score":0,"maxScore":null,"comment":""}],
+  "strengths": [],
+  "problems": [],
+  "specificSuggestions": [{"problem":"","suggestion":""}],
+  "goodSentences": [{"sentence":"","reason":""}],
+  "weakSentences": [{"sentence":"","problem":"","rewrite":""}],
+  "improvedEssay": "",
+  "nextTrainingAdvice": ""
+}`;
 }
 
 async function fetchWithTimeout(
@@ -139,6 +313,24 @@ async function fetchWithTimeout(
   }
 }
 
+function isResponseFormatUnsupported(status: number, message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    (status === 400 || status === 422) &&
+    (
+      normalized.includes('response_format') ||
+      normalized.includes('response format') ||
+      normalized.includes('json_object') ||
+      normalized.includes('unsupported parameter') ||
+      normalized.includes('unknown parameter')
+    )
+  );
+}
+
+function isNonRetryableApiError(error: Error): boolean {
+  return /401|403|invalid api key|unauthorized|forbidden/i.test(error.message);
+}
+
 async function callMinimaxChatWithRetry(
   apiKey: string,
   messages: { role: string; content: string }[],
@@ -146,18 +338,24 @@ async function callMinimaxChatWithRetry(
   retryDelay: number = 5000
 ): Promise<string> {
   let lastError: Error | null = null;
+  let useJsonResponseFormat = true;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const requestBody: Record<string, unknown> = {
-        model: DEFAULT_MODEL,
+        model: DEFAULT_TEXT_MODEL,
         messages,
-        temperature: 0.7,
+        temperature: getCorrectionTemperature(),
+        max_tokens: getCorrectionMaxTokens(),
         stream: false,
       };
 
+      if (useJsonResponseFormat) {
+        requestBody.response_format = { type: 'json_object' };
+      }
+
       const response = await fetchWithTimeout(
-        `${MINIMAX_API_HOST}/v1/chat/completions`,
+        `${getMinimaxApiHost()}/v1/chat/completions`,
         {
           method: 'POST',
           headers: {
@@ -166,7 +364,7 @@ async function callMinimaxChatWithRetry(
           },
           body: JSON.stringify(requestBody),
         },
-        API_TIMEOUT_MS
+        getCorrectionTimeoutMs()
       );
 
       if (!response.ok) {
@@ -175,14 +373,19 @@ async function callMinimaxChatWithRetry(
           errorData?.error?.message ||
           errorData?.base_resp?.status_msg ||
           response.statusText;
-        throw new Error(`API error ${response.status}: ${errorMsg}`);
+        const message = `AI接口失败 ${response.status}: ${errorMsg}`;
+        if (useJsonResponseFormat && isResponseFormatUnsupported(response.status, String(errorMsg))) {
+          useJsonResponseFormat = false;
+          throw new Error(`${message}，已切换为普通 JSON 提示重试`);
+        }
+        throw new Error(message);
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
 
       if (!content) {
-        throw new Error('No content in API response');
+        throw new Error('AI接口返回内容为空');
       }
 
       return content;
@@ -190,6 +393,10 @@ async function callMinimaxChatWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err));
 
       console.error(`[AI Correction] Attempt ${attempt}/${maxRetries} failed:`, lastError.message);
+
+      if (isNonRetryableApiError(lastError)) {
+        break;
+      }
 
       if (attempt < maxRetries) {
         console.log(`[AI Correction] Retrying in ${retryDelay / 1000} seconds...`);
@@ -202,27 +409,14 @@ async function callMinimaxChatWithRetry(
 }
 
 export async function correctEssay(
-  taskId: string,
+  _taskId: string,
   student: Student,
   correctionRequirement: string,
   recognizedText: string
 ): Promise<CorrectionResult> {
-  const apiKey = process.env.MINIMAX_API_KEY;
+  const apiKey = getMinimaxApiKey();
   if (!apiKey) {
     return { success: false, error: 'MINIMAX_API_KEY is not configured' };
-  }
-
-  const task = getTask(taskId);
-  if (!task) {
-    return { success: false, error: `Task ${taskId} not found` };
-  }
-
-  const studentIndex = task.students.findIndex(
-    (s) => s.studentName === student.studentName
-  );
-  if (studentIndex !== -1) {
-    task.students[studentIndex].aiStatus = 'processing';
-    saveTask(task);
   }
 
   try {
@@ -233,27 +427,52 @@ export async function correctEssay(
 
     const response = await callMinimaxChatWithRetry(
       apiKey,
-      [{ role: 'user', content: prompt }],
-      5, // 最多重试5次
-      30000 // 30秒后重试
+      [
+        {
+          role: 'system',
+          content: '你是语文作文批改老师。只输出合法 JSON，不输出思考过程、解释、Markdown 或 <think> 标签。',
+        },
+        { role: 'user', content: prompt },
+      ],
+      getCorrectionMaxRetries(),
+      getCorrectionRetryDelayMs()
     );
 
     if (!response || response.trim().length === 0) {
       return { success: false, error: 'AI 批改返回为空' };
     }
 
-    const report = parseReportJson(response);
+    let report = parseReportJson(response, student.studentName);
+
+    if (!report) {
+      const repairResponse = await callMinimaxChatWithRetry(
+        apiKey,
+        [
+          {
+            role: 'system',
+            content: '你是 JSON 格式修复器。只输出严格合法 JSON，不输出思考过程、解释、Markdown 或 <think> 标签。',
+          },
+          {
+            role: 'user',
+            content: buildJsonRepairPrompt(
+              student.studentName,
+              correctionRequirement,
+              recognizedText,
+              response
+            ),
+          },
+        ],
+        1,
+        getCorrectionRetryDelayMs()
+      );
+      report = parseReportJson(repairResponse, student.studentName);
+    }
 
     if (!report) {
       return {
         success: false,
-        error: `AI 返回格式错误: ${response.substring(0, 100)}...`,
+        error: `AI返回格式错误，无法解析为批改报告: ${response.substring(0, MAX_RESPONSE_PREVIEW_LENGTH)}...`,
       };
-    }
-
-    if (studentIndex !== -1) {
-      task.students[studentIndex].aiStatus = 'completed';
-      saveTask(task);
     }
 
     return {

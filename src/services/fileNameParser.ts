@@ -21,7 +21,7 @@ export function parseFileName(fileName: string): ParsedFile | null {
   const match = fileName.match(FILENAME_PATTERN);
   if (!match) return null;
 
-  const [, studentName, pageIndexStr, ext] = match;
+  const [, studentName, pageIndexStr] = match;
   const pageIndex = parseInt(pageIndexStr, 10);
 
   if (!studentName || isNaN(pageIndex) || pageIndex <= 0) {
@@ -66,7 +66,7 @@ export function groupByStudent(files: ParsedFile[]): Map<string, ParsedFile[]> {
     grouped.set(file.studentName, existing);
   }
 
-  for (const [_, files_of_student] of grouped) {
+  for (const files_of_student of grouped.values()) {
     files_of_student.sort((a, b) => a.pageIndex - b.pageIndex);
   }
 

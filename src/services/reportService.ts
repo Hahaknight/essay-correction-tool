@@ -33,23 +33,15 @@ export interface ReportData {
   nextTrainingAdvice: string;
 }
 
-function escapeHtml(str: string): string {
-  if (!str) return '';
-  return str
+function escapeHtml(str: unknown): string {
+  if (str == null) return '';
+  const s = String(str);
+  return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#x27;');
-}
-
-function escapeCsvField(value: string | number | undefined | null): string {
-  if (value === undefined || value === null) return '';
-  const str = String(value);
-  if (['=', '+', '-', '@', '\t', '\r'].includes(str.charAt(0))) {
-    return `"'${str.replace(/"/g, '""')}"`;
-  }
-  return `"${str.replace(/"/g, '""')}"`;
 }
 
 export function generateHtmlReport(
