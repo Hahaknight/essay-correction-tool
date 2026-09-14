@@ -7,6 +7,8 @@
 
 批量上传学生作文图片，通过 MiniMax AI 自动识别文字并进行作文批改，生成详细的 HTML 报告。
 
+> **与 [ai-chinese-teacher](https://github.com/Hahaknight/ai-chinese-teacher) 的关系**：同一作文批改产品线的两个形态。本项目是 **Web 独立版**——无需微信生态，浏览器打开即用，Docker 自部署，适合个人老师快速上手；ai-chinese-teacher 是**微信小程序版**——移动端拍照批量场景，带素材库/病句修改/讲座心得等教学模块与 Word/PDF 导出。两者共享批改流水线的设计经验，各自独立演进。
+
 ## 功能
 
 - 批量上传作文图片（支持 jpg/png/webp）
