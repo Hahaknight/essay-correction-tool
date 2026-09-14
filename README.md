@@ -1,5 +1,10 @@
 # 作文 AI 批改工具
 
+![Next.js](https://img.shields.io/badge/Next.js-16-000000?logo=next.js&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)
+![Docker](https://img.shields.io/badge/%E9%83%A8%E7%BD%B2-Docker-2496ED?logo=docker&logoColor=white)
+
 批量上传学生作文图片，通过 MiniMax AI 自动识别文字并进行作文批改，生成详细的 HTML 报告。
 
 ## 功能
@@ -12,6 +17,41 @@
 - 工作台式批改流程（规则、上传、进度、结果在同一页）
 - 批量下载已成功报告（ZIP）
 - 任务历史记录、单篇重试与一键重试失败项
+
+## 架构
+
+```mermaid
+flowchart LR
+    UI["工作台页面 (Next.js App Router + react-dropzone)"]
+    FNP["fileNameParser 按文件名分组学生"]
+    OCR["imageRecognitionService 图像识别"]
+    COR["aiCorrectionService 批改"]
+    MM["MiniMax API (vision + chat)"]
+    REP["reportService HTML 报告"]
+    ZIP["jszip / archiver 批量打包"]
+    TS["taskService 任务状态与历史"]
+
+    UI -->|"图片批量上传"| FNP --> OCR --> COR --> REP --> ZIP
+    TS -.->|"pending / processing / success / failed"| COR
+    OCR & COR --> MM
+```
+
+### 服务层（`src/services/`）
+
+| 服务 | 职责 |
+|---|---|
+| `fileNameParser` | 按 `学生姓名-页码.jpg` 规则自动分组多页作文 |
+| `imageRecognitionService` | 调用 MiniMax 视觉模型提取作文文字 |
+| `aiCorrectionService` / `minimaxService` | 批改调用、评分与结构化建议输出 |
+| `reportService` / `summaryService` | HTML 报告与批改总结生成 |
+| `taskService` | 任务状态机与历史记录 |
+
+### 工程亮点
+
+- **超时与重试治理**：批改调用 `MINIMAX_CORRECTION_TIMEOUT_MS=300000`、失败重试 2 次、延迟 5s——针对长文批改的真实耗时校准
+- **fire-and-forget 重试接口**：重试请求立即返回、后台继续处理，避免 HTTP 连接卡住 1-2 分钟
+- **Next.js standalone 输出**：生产构建仅含运行时依赖，Docker 镜像精简
+- **质量脚本**：`npm run test` 跑 `scripts/quality-check.ts` 质量检查，`scripts/retry-failed.ts` 一键重试失败任务
 
 ## 快速部署（Docker）
 
